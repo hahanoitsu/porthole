@@ -1,0 +1,44 @@
+# Every push to main builds Porthole and publishes it as a release: a DMG and a zipped app,
+# versioned 0.1.<run number>, which keeps counting up even if history is rewritten.
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write  # to create releases
+
+concurrency:
+  group: release
+  cancel-in-progress: false  # every commit gets its release, in order
+
+jobs:
+  release:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Porthole.app
+        # Ad hoc signed: there's no certificate here. Set UNIVERSAL=1 to include Intel as well.
+        run: BUILD_NUMBER=${{ github.run_number }} CODESIGN_IDENTITY=- Scripts/build-app.sh
+
+      - name: Make the DMG and zip
+        run: Scripts/make-dmg.sh
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' build/Porthole.app/Contents/Info.plist)
+          cat > notes.md <<EOF
+          Built from $(git log -1 --format='%h: %s')
+
+          **Installing:** open the DMG and drag Porthole to Applications. The app isn't notarized,
+          so the first time macOS refuses to open it: go to System Settings → Privacy & Security
+          and click **Open Anyway**. Each new build also asks again to find devices on your local
+          network; allow it, or your iPhone can't see Porthole.
+          EOF
+          gh release create "v$VERSION" "build/Porthole-$VERSION.dmg" "build/Porthole-$VERSION.zip" \
+            --target "$GITHUB_SHA" --title "Porthole $VERSION" --notes-file notes.md
